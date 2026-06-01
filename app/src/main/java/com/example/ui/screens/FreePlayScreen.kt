@@ -34,6 +34,9 @@ fun FreePlayScreen(onBack: () -> Unit) {
             Text("Free Play", fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 16.dp))
         }
 
-        PianoKeyboardView(modifier = Modifier.weight(1f))
+        PianoKeyboardView(
+            modifier = Modifier.weight(1f),
+            onNotePlayed = { com.example.audio.SoundManager.playNote(it) }
+        )
     }
 }

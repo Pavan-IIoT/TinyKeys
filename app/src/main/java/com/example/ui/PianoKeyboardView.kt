@@ -74,7 +74,8 @@ val noteColors = listOf(
 data class TileRenderData(
     val noteName: String,
     val yPosDp: androidx.compose.ui.unit.Dp,
-    val heightDp: androidx.compose.ui.unit.Dp
+    val heightDp: androidx.compose.ui.unit.Dp,
+    val isActive: Boolean = false
 )
 
 @Composable
@@ -83,10 +84,12 @@ fun PianoKeyboardView(
     highlightedNote: String? = null,
     wrongNote: String? = null,
     tiles: List<TileRenderData> = emptyList(),
-    onNotePlayed: (String) -> Unit = {}
+    onNotePlayed: (String) -> Unit = {},
+    onNoteReleased: (String) -> Unit = {}
 ) {
     val pressedKeys = remember { mutableStateMapOf<Long, String>() }
     val currentOnNotePlayed by rememberUpdatedState(newValue = onNotePlayed)
+    val currentOnNoteReleased by rememberUpdatedState(newValue = onNoteReleased)
 
     BoxWithConstraints(
         modifier = modifier
@@ -133,13 +136,16 @@ fun PianoKeyboardView(
                                 if (hitKey != null) {
                                     val previousKey = pressedKeys[change.id.value]
                                     if (previousKey != hitKey) {
+                                        if (previousKey != null) {
+                                            currentOnNoteReleased(previousKey)
+                                        }
                                         pressedKeys[change.id.value] = hitKey
-                                        SoundManager.playNote(hitKey)
                                         currentOnNotePlayed(hitKey)
                                     }
                                 }
                             } else {
-                                pressedKeys.remove(change.id.value)
+                                val releasedNote = pressedKeys.remove(change.id.value)
+                                if (releasedNote != null) currentOnNoteReleased(releasedNote)
                             }
                         }
                     }
@@ -166,31 +172,42 @@ fun PianoKeyboardView(
                     .background(Color.White.copy(alpha = 0.4f))
             )
 
-            for (tile in tiles) {
-                val key = pianoKeys.find { it.name == tile.noteName } ?: continue
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(tileTargetY)
+                    .clipToBounds()
+            ) {
+                for (tile in tiles) {
+                    val key = pianoKeys.find { it.name == tile.noteName } ?: continue
 
-                val startX = if (key.isBlack) {
-                    wWidth * key.whiteIndex + wWidth * key.offsetRatio + wWidth * 0.05f
-                } else {
-                    wWidth * key.whiteIndex + wWidth * 0.1f
-                }
-                val keyWidth = if (key.isBlack) bWidth * 0.9f else wWidth * 0.8f
-                
-                val blockColor = if (key.isBlack) {
-                    noteColors[(key.whiteIndex + 3) % noteColors.size]
-                } else {
-                    noteColors[key.whiteIndex % noteColors.size]
-                }
+                    val startX = if (key.isBlack) {
+                        wWidth * key.whiteIndex + wWidth * key.offsetRatio + wWidth * 0.05f
+                    } else {
+                        wWidth * key.whiteIndex + wWidth * 0.1f
+                    }
+                    val keyWidth = if (key.isBlack) bWidth * 0.9f else wWidth * 0.8f
+                    
+                    val blockColor = if (key.isBlack) {
+                        noteColors[(key.whiteIndex + 3) % noteColors.size]
+                    } else {
+                        noteColors[key.whiteIndex % noteColors.size]
+                    }
 
-                if (tile.yPosDp + tile.heightDp > 0.dp) {
-                    Box(
-                        modifier = Modifier
-                            .offset(x = startX, y = tile.yPosDp)
-                            .width(keyWidth)
-                            .height(tile.heightDp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(blockColor.copy(alpha = 0.8f))
-                    )
+                    if (tile.yPosDp + tile.heightDp > 0.dp) {
+                        Box(
+                            modifier = Modifier
+                                .offset(x = startX, y = tile.yPosDp)
+                                .width(keyWidth)
+                                .height(tile.heightDp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (tile.isActive) blockColor else blockColor.copy(alpha = 0.8f))
+                                .then(
+                                    if (tile.isActive) androidx.compose.ui.Modifier.border(2.dp, androidx.compose.ui.graphics.Color.White.copy(alpha = 0.8f), androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                                    else androidx.compose.ui.Modifier
+                                )
+                        )
+                    }
                 }
             }
         }

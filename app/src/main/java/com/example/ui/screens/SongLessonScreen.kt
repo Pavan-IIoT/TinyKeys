@@ -32,6 +32,8 @@ import com.example.ui.theme.PastelBlue
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+enum class NoteState { UPCOMING, ACTIVE, DONE }
+
 data class NoteSchedule(val index: Int, val note: String, val durationBeats: Float, val scheduledTimeMs: Long)
 
 @Composable
@@ -68,29 +70,44 @@ fun SongLessonScreen(
         schedules
     }
     
-    val hitNoteIndices = remember { mutableStateMapOf<Int, Boolean>() }
+    val noteStates = remember { mutableStateMapOf<Int, NoteState>() }
 
     LaunchedEffect(isFinished) {
         if (!isFinished) {
             var lastFrameTime = withFrameMillis { it }
+            val msPerBeat = 60000f / song.bpm
             while (true) {
                 val currentFrameTime = withFrameMillis { it }
                 val delta = currentFrameTime - lastFrameTime
                 lastFrameTime = currentFrameTime
                 
-                val nextUnplayed = noteSchedules.firstOrNull { !hitNoteIndices.containsKey(it.index) }
-                if (nextUnplayed != null) {
-                    currentElapsedTimeMs += delta
-                    if (currentElapsedTimeMs > nextUnplayed.scheduledTimeMs) {
-                        currentElapsedTimeMs = nextUnplayed.scheduledTimeMs
-                    }
-                } else {
-                    currentElapsedTimeMs += delta
+                currentElapsedTimeMs += delta
+                
+                val nextUpcoming = noteSchedules.firstOrNull { noteStates[it.index] == null || noteStates[it.index] == NoteState.UPCOMING }
+                if (nextUpcoming != null && currentElapsedTimeMs > nextUpcoming.scheduledTimeMs) {
+                    currentElapsedTimeMs = nextUpcoming.scheduledTimeMs
                 }
                 
-                if (noteSchedules.all { hitNoteIndices.containsKey(it.index) }) {
-                    if (!isFinished) {
-                        isFinished = true
+                noteSchedules.forEach { ns ->
+                    val state = noteStates[ns.index] ?: NoteState.UPCOMING
+                    if (state == NoteState.ACTIVE) {
+                        val timeHeldMs = currentElapsedTimeMs - ns.scheduledTimeMs
+                        val totalHoldMs = ns.durationBeats * msPerBeat
+                        if (timeHeldMs >= totalHoldMs) {
+                            noteStates[ns.index] = NoteState.DONE
+                        }
+                    }
+                }
+                
+                if (noteSchedules.all { noteStates[it.index] == NoteState.DONE }) {
+                    val lastSchedule = noteSchedules.lastOrNull()
+                    if (lastSchedule != null) {
+                        val totalSongTimeMs = lastSchedule.scheduledTimeMs + (lastSchedule.durationBeats * msPerBeat).toLong()
+                        if (currentElapsedTimeMs >= totalSongTimeMs) {
+                            if (!isFinished) {
+                                isFinished = true
+                            }
+                        }
                     }
                 }
             }
@@ -113,16 +130,18 @@ fun SongLessonScreen(
         }
     }
 
-    val nextUnplayedSchedule = noteSchedules.firstOrNull { !hitNoteIndices.containsKey(it.index) }
-    val nextNote = nextUnplayedSchedule?.note
+    val msPerBeatForDuration = 60000f / song.bpm
+    val nextUpcomingSchedule = noteSchedules.firstOrNull { noteStates[it.index] == null || noteStates[it.index] == NoteState.UPCOMING }
+    val nextNote = nextUpcomingSchedule?.note ?: noteSchedules.firstOrNull { noteStates[it.index] == NoteState.ACTIVE }?.note
 
     val handleNotePlayed: (String) -> Unit = { note ->
         if (!isFinished) {
-            val hitCandidate = nextUnplayedSchedule?.takeIf { 
+            val hitCandidate = nextUpcomingSchedule?.takeIf { 
                 it.note == note && (it.scheduledTimeMs - currentElapsedTimeMs <= 500)
             }
             if (hitCandidate != null) {
-                hitNoteIndices[hitCandidate.index] = true
+                noteStates[hitCandidate.index] = NoteState.ACTIVE
+                SoundManager.playNote(note, (hitCandidate.durationBeats * msPerBeatForDuration).toInt())
             } else {
                 mistakes++
                 lastWrongNote = note
@@ -132,6 +151,14 @@ fun SongLessonScreen(
                         lastWrongNote = null
                     }
                 }
+            }
+        }
+    }
+
+    val handleNoteReleased: (String) -> Unit = { note ->
+        noteSchedules.filter { noteStates[it.index] == NoteState.ACTIVE }.forEach { activeNs ->
+            if (activeNs.note == note) {
+                noteStates[activeNs.index] = NoteState.DONE
             }
         }
     }
@@ -146,23 +173,43 @@ fun SongLessonScreen(
         val tileTargetY = trackHeightDp - 30.dp
         
         val tiles = noteSchedules.mapNotNull { ns ->
-            if (hitNoteIndices.containsKey(ns.index)) return@mapNotNull null
+            val state = noteStates[ns.index] ?: NoteState.UPCOMING
+            if (state == NoteState.DONE) return@mapNotNull null
             
-            val timeUntilHitMs = ns.scheduledTimeMs - currentElapsedTimeMs
-            
-            val rawHeight = (ns.durationBeats * (msPerBeat / 1000f)) * pixelsPerSecondDp.value
-            val heightDp = maxOf(rawHeight * 2.0f, 64f)
-            
-            val bottomYDp = tileTargetY - ((timeUntilHitMs / 1000f) * pixelsPerSecondDp.value).dp
-            val yPosDp = bottomYDp - heightDp.dp
-            
-            if (yPosDp > maxHeightDp) return@mapNotNull null
-            
-            TileRenderData(
-                noteName = ns.note,
-                yPosDp = yPosDp,
-                heightDp = heightDp.dp
-            )
+            val totalHoldMs = ns.durationBeats * msPerBeat
+            val rawHeight = (totalHoldMs / 1000f) * pixelsPerSecondDp.value
+
+            if (state == NoteState.ACTIVE) {
+                val timeHeldMs = currentElapsedTimeMs - ns.scheduledTimeMs
+                val remainingHoldMs = (totalHoldMs - timeHeldMs).coerceAtLeast(0f)
+                val remainingHeightDp = (remainingHoldMs / 1000f) * pixelsPerSecondDp.value
+                val yPosDp = tileTargetY - remainingHeightDp.dp
+                val heightDp = remainingHeightDp.dp
+                
+                if (remainingHeightDp <= 0) return@mapNotNull null
+                
+                TileRenderData(
+                    noteName = ns.note,
+                    yPosDp = yPosDp,
+                    heightDp = heightDp,
+                    isActive = true
+                )
+            } else {
+                val timeUntilHitMs = ns.scheduledTimeMs - currentElapsedTimeMs
+                val heightDp = maxOf(rawHeight * 2.0f, 64f)
+                
+                val bottomYDp = tileTargetY - ((timeUntilHitMs / 1000f) * pixelsPerSecondDp.value).dp
+                val yPosDp = bottomYDp - heightDp.dp
+                
+                if (yPosDp > trackHeightDp) return@mapNotNull null
+                
+                TileRenderData(
+                    noteName = ns.note,
+                    yPosDp = yPosDp,
+                    heightDp = heightDp.dp,
+                    isActive = false
+                )
+            }
         }
 
         PianoKeyboardView(
@@ -170,7 +217,8 @@ fun SongLessonScreen(
             highlightedNote = nextNote,
             wrongNote = lastWrongNote,
             tiles = tiles,
-            onNotePlayed = handleNotePlayed
+            onNotePlayed = handleNotePlayed,
+            onNoteReleased = handleNoteReleased
         )
 
         IconButton(
@@ -205,7 +253,7 @@ fun SongLessonScreen(
                         Button(onClick = {
                             currentElapsedTimeMs = -2500L
                             mistakes = 0
-                            hitNoteIndices.clear()
+                            noteStates.clear()
                             isFinished = false
                         }) {
                             Text("Play Again", fontSize = 20.sp)

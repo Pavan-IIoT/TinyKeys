@@ -58,9 +58,9 @@ object SoundManager {
         return sample
     }
 
-    fun playNote(note: String) {
-        val bytes = noteBytes[note] ?: scope.launch { playBuffer(generateTone(frequencies[note]!!, DURATION_MS), DURATION_MS) }.let { return }
-        playBuffer(bytes, DURATION_MS)
+    fun playNote(note: String, durationMs: Int = DURATION_MS) {
+        val bytes = noteBytes[note] ?: scope.launch { playBuffer(generateTone(frequencies[note]!!, durationMs.coerceAtLeast(100)), durationMs) }.let { return }
+        playBuffer(bytes, durationMs)
     }
 
     fun playCorrectFeedback() {
@@ -105,7 +105,11 @@ object SoundManager {
                 track.play()
                 
                 // Release after playing
-                delay(durationMs.toLong() + 100)
+                delay(durationMs.toLong())
+                try {
+                    track.pause()
+                    track.flush()
+                } catch (e: Exception) {}
             } catch (e: Exception) {
                 // Ignore audio track exhaustion/limit errors to prevent application crash
             } finally {
