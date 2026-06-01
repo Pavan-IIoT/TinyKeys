@@ -69,7 +69,6 @@ fun SongLessonScreen(
     }
     
     val hitNoteIndices = remember { mutableStateMapOf<Int, Boolean>() }
-    val missedNoteIndices = remember { mutableStateMapOf<Int, Boolean>() }
 
     LaunchedEffect(isFinished) {
         if (!isFinished) {
@@ -78,18 +77,18 @@ fun SongLessonScreen(
                 val currentFrameTime = withFrameMillis { it }
                 val delta = currentFrameTime - lastFrameTime
                 lastFrameTime = currentFrameTime
-                currentElapsedTimeMs += delta
                 
-                noteSchedules.forEach { ns ->
-                    if (!hitNoteIndices.containsKey(ns.index) && !missedNoteIndices.containsKey(ns.index)) {
-                        if (currentElapsedTimeMs > ns.scheduledTimeMs + 300) {
-                            missedNoteIndices[ns.index] = true
-                            mistakes++
-                        }
+                val nextUnplayed = noteSchedules.firstOrNull { !hitNoteIndices.containsKey(it.index) }
+                if (nextUnplayed != null) {
+                    currentElapsedTimeMs += delta
+                    if (currentElapsedTimeMs > nextUnplayed.scheduledTimeMs) {
+                        currentElapsedTimeMs = nextUnplayed.scheduledTimeMs
                     }
+                } else {
+                    currentElapsedTimeMs += delta
                 }
                 
-                if (noteSchedules.all { hitNoteIndices.containsKey(it.index) || missedNoteIndices.containsKey(it.index) }) {
+                if (noteSchedules.all { hitNoteIndices.containsKey(it.index) }) {
                     if (!isFinished) {
                         isFinished = true
                     }
@@ -114,17 +113,13 @@ fun SongLessonScreen(
         }
     }
 
-    val nextNote = noteSchedules.firstOrNull { 
-        !hitNoteIndices.containsKey(it.index) && !missedNoteIndices.containsKey(it.index)
-    }?.note
+    val nextUnplayedSchedule = noteSchedules.firstOrNull { !hitNoteIndices.containsKey(it.index) }
+    val nextNote = nextUnplayedSchedule?.note
 
     val handleNotePlayed: (String) -> Unit = { note ->
         if (!isFinished) {
-            val hitCandidate = noteSchedules.firstOrNull {
-                !hitNoteIndices.containsKey(it.index) && 
-                !missedNoteIndices.containsKey(it.index) && 
-                it.note == note && 
-                Math.abs(currentElapsedTimeMs - it.scheduledTimeMs) <= 300
+            val hitCandidate = nextUnplayedSchedule?.takeIf { 
+                it.note == note && (it.scheduledTimeMs - currentElapsedTimeMs <= 500)
             }
             if (hitCandidate != null) {
                 hitNoteIndices[hitCandidate.index] = true
@@ -145,11 +140,11 @@ fun SongLessonScreen(
         val maxHeightDp = maxHeight
         val trackHeightDp = maxHeightDp * 0.45f
         
-        val pixelsPerSecondDp = trackHeightDp / 2.5f 
+        val pixelsPerSecondDp = trackHeightDp / 4.0f 
         val msPerBeat = 60000f / song.bpm
         
         val tiles = noteSchedules.mapNotNull { ns ->
-            if (hitNoteIndices.containsKey(ns.index) || missedNoteIndices.containsKey(ns.index)) return@mapNotNull null
+            if (hitNoteIndices.containsKey(ns.index)) return@mapNotNull null
             
             val timeUntilHitMs = ns.scheduledTimeMs - currentElapsedTimeMs
             
@@ -206,7 +201,6 @@ fun SongLessonScreen(
                             currentElapsedTimeMs = -2500L
                             mistakes = 0
                             hitNoteIndices.clear()
-                            missedNoteIndices.clear()
                             isFinished = false
                         }) {
                             Text("Play Again", fontSize = 20.sp)
