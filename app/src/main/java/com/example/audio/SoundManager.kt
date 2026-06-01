@@ -138,7 +138,15 @@ object SoundManager {
                     trackPool.removeFirstOrNull()
                 } ?: createTrack(Math.max(requiredBufferSize, MAX_TRACK_BUFFER_BYTES))
 
-                track.write(bytes, 0, bytes.size)
+                val paddedBytes = if (bytes.size * 2 < MAX_TRACK_BUFFER_BYTES) {
+                    val arr = ShortArray(MAX_TRACK_BUFFER_BYTES / 2)
+                    System.arraycopy(bytes, 0, arr, 0, bytes.size)
+                    arr
+                } else {
+                    bytes
+                }
+
+                track.write(paddedBytes, 0, paddedBytes.size)
                 track.play()
                 
                 delay(durationMs.toLong())
@@ -148,30 +156,25 @@ object SoundManager {
             } catch (e: Exception) {
                 // Ignore audio track exhaustion/limit errors to prevent application crash
             } finally {
-                try {
-                    track?.release()
-                } catch (e: Exception) {
-                    // Ignore release errors
-                }
-                activeTracks.decrementAndGet()
-                
-                // Replenish offline
-                scope.launch {
+                if (track != null) {
                     try {
-                        val newTrack = createTrack(MAX_TRACK_BUFFER_BYTES)
+                        track.stop()
+                        track.reloadStaticData()
+                        track.setPlaybackHeadPosition(0)
                         val added = synchronized(poolLock) {
                             if (trackPool.size < POOL_SIZE) {
-                                trackPool.addLast(newTrack)
+                                trackPool.addLast(track)
                                 true
-                            } else {
-                                false
-                            }
+                            } else false
                         }
                         if (!added) {
-                            newTrack.release()
+                            track.release()
                         }
-                    } catch (e: Exception) {}
+                    } catch (e: Exception) {
+                        try { track.release() } catch (ignored: Exception) {}
+                    }
                 }
+                activeTracks.decrementAndGet()
             }
         }
     }
