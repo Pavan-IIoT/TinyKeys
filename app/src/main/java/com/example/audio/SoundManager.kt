@@ -7,9 +7,34 @@ import kotlinx.coroutines.*
 import kotlin.math.sin
 
 object SoundManager {
-    private var scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private var scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private const val SAMPLE_RATE = 44100
-    private const val DURATION_MS = 1500
+    private const val DEFAULT_DURATION_MS = 600
+
+    private const val POOL_SIZE = 8
+    private val trackPool = ArrayDeque<AudioTrack>()
+    private val poolLock = Any()
+    private val MAX_TRACK_BUFFER_BYTES = (2000 * SAMPLE_RATE / 1000) * 2
+
+    private fun createTrack(bufferSize: Int): AudioTrack {
+        return AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(SAMPLE_RATE)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .build()
+            )
+            .setBufferSizeInBytes(bufferSize)
+            .setTransferMode(AudioTrack.MODE_STATIC)
+            .build()
+    }
 
     private val frequencies = mapOf(
         "C4" to 261.63, "C#4" to 277.18, "D4" to 293.66, "D#4" to 311.13,
@@ -20,15 +45,26 @@ object SoundManager {
         "G#5" to 830.61, "A5" to 880.00, "A#5" to 932.33, "B5" to 987.77
     )
 
-    private val noteBytes = mutableMapOf<String, ShortArray>()
+    private val toneCache = java.util.concurrent.ConcurrentHashMap<String, ShortArray>()
     private lateinit var correctFeedbackBytes: ShortArray
     private lateinit var wrongFeedbackBytes: ShortArray
 
     fun init() {
-        if (!scope.isActive) scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+        if (!scope.isActive) scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         scope.launch {
-            frequencies.forEach { (note, freq) ->
-                noteBytes[note] = generateTone(freq, DURATION_MS)
+            synchronized(poolLock) {
+                while (trackPool.size < POOL_SIZE) {
+                    try {
+                        trackPool.addLast(createTrack(MAX_TRACK_BUFFER_BYTES))
+                    } catch (e: Exception) {
+                        break
+                    }
+                }
+            }
+            listOf(300, 600, 1200).forEach { duration ->
+                frequencies.forEach { (note, freq) ->
+                    toneCache["$note-$duration"] = generateTone(freq, duration)
+                }
             }
             correctFeedbackBytes = generateTone(880.0, 150)
             wrongFeedbackBytes = generateTone(150.0, 300)
@@ -37,14 +73,18 @@ object SoundManager {
 
     fun release() {
         scope.cancel()
-        noteBytes.clear()
+        toneCache.clear()
+        synchronized(poolLock) {
+            trackPool.forEach { try { it.release() } catch (e: Exception) {} }
+            trackPool.clear()
+        }
     }
 
     private fun generateTone(freq: Double, durationMs: Int): ShortArray {
         val numSamples = (durationMs * SAMPLE_RATE) / 1000
         val sample = ShortArray(numSamples)
-        val envelopeAttack = (0.05 * SAMPLE_RATE).toInt() // 50ms attack
-        val envelopeRelease = (1.0 * SAMPLE_RATE).toInt() // 1s release
+        val envelopeAttack = (0.02 * SAMPLE_RATE).toInt() // 20ms attack
+        val envelopeRelease = (numSamples * 0.3).toInt() // 30% of note duration
 
         for (i in 0 until numSamples) {
             val angle = 2.0 * Math.PI * i / (SAMPLE_RATE / freq)
@@ -58,9 +98,19 @@ object SoundManager {
         return sample
     }
 
-    fun playNote(note: String, durationMs: Int = DURATION_MS) {
-        val bytes = noteBytes[note] ?: scope.launch { playBuffer(generateTone(frequencies[note]!!, durationMs.coerceAtLeast(100)), durationMs) }.let { return }
-        playBuffer(bytes, durationMs)
+    fun playNote(note: String, durationMs: Int = DEFAULT_DURATION_MS) {
+        val key = "$note-$durationMs"
+        val bytes = toneCache[key]
+        if (bytes != null) {
+            playBuffer(bytes, durationMs)
+        } else {
+            scope.launch {
+                val freq = frequencies[note] ?: return@launch
+                val generated = generateTone(freq, durationMs)
+                toneCache[key] = generated
+                playBuffer(generated, durationMs)
+            }
+        }
     }
 
     fun playCorrectFeedback() {
@@ -83,32 +133,17 @@ object SoundManager {
         scope.launch {
             var track: AudioTrack? = null
             try {
-                track = AudioTrack.Builder()
-                    .setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                            .build()
-                    )
-                    .setAudioFormat(
-                        AudioFormat.Builder()
-                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                            .setSampleRate(SAMPLE_RATE)
-                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                            .build()
-                    )
-                    .setBufferSizeInBytes(bytes.size * 2)
-                    .setTransferMode(AudioTrack.MODE_STATIC)
-                    .build()
+                val requiredBufferSize = bytes.size * 2
+                track = synchronized(poolLock) {
+                    trackPool.removeFirstOrNull()
+                } ?: createTrack(Math.max(requiredBufferSize, MAX_TRACK_BUFFER_BYTES))
 
                 track.write(bytes, 0, bytes.size)
                 track.play()
                 
-                // Release after playing
                 delay(durationMs.toLong())
                 try {
-                    track.pause()
-                    track.flush()
+                    track.stop()
                 } catch (e: Exception) {}
             } catch (e: Exception) {
                 // Ignore audio track exhaustion/limit errors to prevent application crash
@@ -119,6 +154,24 @@ object SoundManager {
                     // Ignore release errors
                 }
                 activeTracks.decrementAndGet()
+                
+                // Replenish offline
+                scope.launch {
+                    try {
+                        val newTrack = createTrack(MAX_TRACK_BUFFER_BYTES)
+                        val added = synchronized(poolLock) {
+                            if (trackPool.size < POOL_SIZE) {
+                                trackPool.addLast(newTrack)
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        if (!added) {
+                            newTrack.release()
+                        }
+                    } catch (e: Exception) {}
+                }
             }
         }
     }
