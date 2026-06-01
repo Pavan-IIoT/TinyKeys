@@ -1,0 +1,6 @@
+{
+  "name": "TinyKeys",
+  "description": "A piano learning app for children aged 4-8.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
