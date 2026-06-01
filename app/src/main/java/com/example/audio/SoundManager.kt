@@ -10,7 +10,6 @@ object SoundManager {
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private const val SAMPLE_RATE = 44100
     private const val DURATION_MS = 1500
-    private val noteCache = mutableMapOf<String, AudioTrack>()
 
     private val frequencies = mapOf(
         "C4" to 261.63, "C#4" to 277.18, "D4" to 293.66, "D#4" to 311.13,
@@ -22,17 +21,21 @@ object SoundManager {
     )
 
     private val noteBytes = mutableMapOf<String, ShortArray>()
+    private lateinit var correctFeedbackBytes: ShortArray
+    private lateinit var wrongFeedbackBytes: ShortArray
 
     fun init() {
         scope.launch {
             frequencies.forEach { (note, freq) ->
-                noteBytes[note] = generateTone(freq)
+                noteBytes[note] = generateTone(freq, DURATION_MS)
             }
+            correctFeedbackBytes = generateTone(880.0, 150)
+            wrongFeedbackBytes = generateTone(150.0, 300)
         }
     }
 
-    private fun generateTone(freq: Double): ShortArray {
-        val numSamples = (DURATION_MS * SAMPLE_RATE) / 1000
+    private fun generateTone(freq: Double, durationMs: Int): ShortArray {
+        val numSamples = (durationMs * SAMPLE_RATE) / 1000
         val sample = ShortArray(numSamples)
         val envelopeAttack = (0.05 * SAMPLE_RATE).toInt() // 50ms attack
         val envelopeRelease = (1.0 * SAMPLE_RATE).toInt() // 1s release
@@ -51,31 +54,62 @@ object SoundManager {
 
     fun playNote(note: String) {
         val bytes = noteBytes[note] ?: return
-        scope.launch {
-            val track = AudioTrack.Builder()
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build()
-                )
-                .setAudioFormat(
-                    AudioFormat.Builder()
-                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                        .setSampleRate(SAMPLE_RATE)
-                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                        .build()
-                )
-                .setBufferSizeInBytes(bytes.size * 2)
-                .setTransferMode(AudioTrack.MODE_STATIC)
-                .build()
+        playBuffer(bytes, DURATION_MS)
+    }
 
-            track.write(bytes, 0, bytes.size)
-            track.play()
-            
-            // Release after playing
-            delay(DURATION_MS.toLong() + 100)
-            track.release()
+    fun playCorrectFeedback() {
+        if (::correctFeedbackBytes.isInitialized) playBuffer(correctFeedbackBytes, 150)
+    }
+
+    fun playWrongFeedback() {
+        if (::wrongFeedbackBytes.isInitialized) playBuffer(wrongFeedbackBytes, 300)
+    }
+
+    private val activeTracks = java.util.concurrent.atomic.AtomicInteger(0)
+    private const val MAX_TRACKS = 16
+
+    private fun playBuffer(bytes: ShortArray, durationMs: Int) {
+        if (activeTracks.incrementAndGet() > MAX_TRACKS) {
+            activeTracks.decrementAndGet()
+            return
+        }
+
+        scope.launch {
+            var track: AudioTrack? = null
+            try {
+                track = AudioTrack.Builder()
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build()
+                    )
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setSampleRate(SAMPLE_RATE)
+                            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(bytes.size * 2)
+                    .setTransferMode(AudioTrack.MODE_STATIC)
+                    .build()
+
+                track.write(bytes, 0, bytes.size)
+                track.play()
+                
+                // Release after playing
+                delay(durationMs.toLong() + 100)
+            } catch (e: Exception) {
+                // Ignore audio track exhaustion/limit errors to prevent application crash
+            } finally {
+                try {
+                    track?.release()
+                } catch (e: Exception) {
+                    // Ignore release errors
+                }
+                activeTracks.decrementAndGet()
+            }
         }
     }
 }

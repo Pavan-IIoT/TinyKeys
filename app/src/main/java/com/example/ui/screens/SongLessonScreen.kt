@@ -10,7 +10,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -21,12 +21,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.audio.SoundManager
 import com.example.data.AppDatabase
 import com.example.data.SongRepository
 import com.example.data.SongScore
 import com.example.ui.PianoKeyboardView
 import com.example.ui.theme.DarkCharcoal
-import com.example.ui.theme.PastelGreen
+import com.example.ui.theme.PastelBlue
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -44,64 +45,58 @@ fun SongLessonScreen(
     var currentNoteIndex by remember { mutableIntStateOf(0) }
     var mistakes by remember { mutableIntStateOf(0) }
     var isFinished by remember { mutableStateOf(false) }
+    var lastWrongNote by remember { mutableStateOf<String?>(null) }
 
     val nextNote = if (currentNoteIndex < song.notes.size) song.notes[currentNoteIndex] else null
     val progress = if (song.notes.isEmpty()) 0f else currentNoteIndex.toFloat() / song.notes.size
 
-    fun handleNotePlayed(note: String) {
-        if (isFinished) return
-        
-        if (note == nextNote) {
-            currentNoteIndex++
-            if (currentNoteIndex >= song.notes.size) {
-                isFinished = true
-                val starsEarned = when {
-                    mistakes == 0 -> 3
-                    mistakes <= 3 -> 2
-                    else -> 1
+    val handleNotePlayed: (String) -> Unit = { note ->
+        if (!isFinished) {
+            if (note == nextNote) {
+                currentNoteIndex++
+                if (currentNoteIndex >= song.notes.size) {
+                    isFinished = true
+                    val starsEarned = when {
+                        mistakes == 0 -> 3
+                        mistakes <= 3 -> 2
+                        else -> 1
+                    }
+                    scope.launch {
+                        val existing = dao.getScore(songId)
+                        val maxStars = maxOf(existing?.stars ?: 0, starsEarned)
+                        dao.insertScore(SongScore(songId, maxStars))
+                    }
                 }
+            } else {
+                mistakes++
+                lastWrongNote = note
                 scope.launch {
-                    val existing = dao.getScore(songId)
-                    val maxStars = maxOf(existing?.stars ?: 0, starsEarned)
-                    dao.insertScore(SongScore(songId, maxStars))
+                    delay(500)
+                    if (lastWrongNote == note) {
+                        lastWrongNote = null
+                    }
                 }
             }
-        } else {
-            mistakes++
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(PastelGreen)) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "Back", modifier = Modifier.size(32.dp))
-                }
-                Text(song.name, fontSize = 28.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(start = 16.dp))
-                
-                Spacer(modifier = Modifier.weight(1f))
-                
-                LinearProgressIndicator(
-                    progress = { progress },
-                    modifier = Modifier
-                        .width(200.dp)
-                        .height(16.dp)
-                        .padding(end = 16.dp),
-                    color = Color.White,
-                    trackColor = Color.White.copy(alpha = 0.3f),
-                )
-            }
+    Box(modifier = Modifier.fillMaxSize().background(PastelBlue)) {
+        PianoKeyboardView(
+            modifier = Modifier.fillMaxSize(),
+            highlightedNote = nextNote,
+            wrongNote = lastWrongNote,
+            upcomingNotes = song.notes,
+            currentNoteIndex = currentNoteIndex,
+            onNotePlayed = handleNotePlayed
+        )
 
-            PianoKeyboardView(
-                modifier = Modifier.weight(1f),
-                highlightedNote = nextNote,
-                onNotePlayed = ::handleNotePlayed
-            )
+        IconButton(
+            onClick = onBack,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(16.dp)
+        ) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", modifier = Modifier.size(32.dp), tint = Color.White)
         }
 
         AnimatedVisibility(

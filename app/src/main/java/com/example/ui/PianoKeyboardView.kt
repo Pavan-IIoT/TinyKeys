@@ -1,8 +1,7 @@
 package com.example.ui
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -14,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -70,13 +70,18 @@ val noteColors = listOf(
 fun PianoKeyboardView(
     modifier: Modifier = Modifier,
     highlightedNote: String? = null,
+    wrongNote: String? = null,
+    upcomingNotes: List<String> = emptyList(),
+    currentNoteIndex: Int = 0,
     onNotePlayed: (String) -> Unit = {}
 ) {
     val pressedKeys = remember { mutableStateMapOf<Long, String>() }
+    val currentOnNotePlayed by rememberUpdatedState(newValue = onNotePlayed)
 
     BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
+            .clipToBounds()
             .background(DarkCharcoal)
             .padding(top = 16.dp, bottom = 16.dp, start = 8.dp, end = 8.dp)
             .pointerInput(Unit) {
@@ -89,9 +94,13 @@ fun PianoKeyboardView(
                             if (change.pressed) {
                                 // Calculate which key is pressed
                                 val pt = change.position
+                                val trackHeight = size.height * (if (upcomingNotes.isNotEmpty()) 0.45f else 0f)
+                                if (pt.y < trackHeight) return@forEach
+                                val keysHeight = size.height - trackHeight
+
                                 val wWidth = size.width / 14f
                                 val bWidth = wWidth * 0.7f
-                                val bHeight = size.height * 0.6f
+                                val bHeight = keysHeight * 0.6f
 
                                 var hitKey: String? = null
                                 
@@ -99,7 +108,7 @@ fun PianoKeyboardView(
                                 for (key in pianoKeys.filter { it.isBlack }) {
                                     val startX = key.whiteIndex * wWidth + wWidth * key.offsetRatio
                                     val endX = startX + bWidth
-                                    if (pt.x in startX..endX && pt.y <= bHeight) {
+                                    if (pt.x in startX..endX && pt.y <= trackHeight + bHeight) {
                                         hitKey = key.name
                                         break
                                     }
@@ -116,7 +125,7 @@ fun PianoKeyboardView(
                                     if (previousKey != hitKey) {
                                         pressedKeys[change.id.value] = hitKey
                                         SoundManager.playNote(hitKey)
-                                        onNotePlayed(hitKey)
+                                        currentOnNotePlayed(hitKey)
                                     }
                                 }
                             } else {
@@ -127,9 +136,66 @@ fun PianoKeyboardView(
                 }
             }
     ) {
+        val trackHeight = maxHeight * (if (upcomingNotes.isNotEmpty()) 0.45f else 0f)
+        val keysHeight = maxHeight - trackHeight
+
         val wWidth = maxWidth / 14
         val bWidth = wWidth * 0.7f
-        val bHeight = maxHeight * 0.6f
+        val wHeight = keysHeight
+        val bHeight = keysHeight * 0.6f
+
+        if (upcomingNotes.isNotEmpty()) {
+            val animatedIndex by animateFloatAsState(
+                targetValue = currentNoteIndex.toFloat(),
+                animationSpec = tween(durationMillis = 300, easing = LinearEasing),
+                label = "block_scroll"
+            )
+
+            val blockHeight = maxHeight * 0.15f
+            val blockSpacing = maxHeight * 0.05f
+            val distancePerNote = blockHeight + blockSpacing
+
+            for (index in (currentNoteIndex - 1).coerceAtLeast(0) .. minOf(currentNoteIndex + 12, upcomingNotes.lastIndex)) {
+                val noteStr = upcomingNotes[index]
+                val key = pianoKeys.find { it.name == noteStr } ?: continue
+
+                val diff = index - animatedIndex
+                val noteYPos = trackHeight - blockHeight - (distancePerNote * diff)
+
+                val startX = if (key.isBlack) {
+                    wWidth * key.whiteIndex + wWidth * key.offsetRatio + wWidth * 0.05f
+                } else {
+                    wWidth * key.whiteIndex + wWidth * 0.1f
+                }
+                val keyWidth = if (key.isBlack) bWidth * 0.9f else wWidth * 0.8f
+                
+                val blockColor = if (key.isBlack) {
+                    noteColors[(key.whiteIndex + 3) % noteColors.size]
+                } else {
+                    noteColors[key.whiteIndex % noteColors.size]
+                }
+
+                Box(
+                    modifier = Modifier
+                        .offset(x = startX, y = noteYPos)
+                        .width(keyWidth)
+                        .height(blockHeight)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(blockColor.copy(alpha = 0.8f))
+                )
+            }
+        }
+
+        val infiniteTransition = rememberInfiniteTransition(label = "arrow_bounce")
+        val arrowOffsetY by infiniteTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = -15f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(400, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "arrow_offset"
+        )
 
         // Draw White Keys
         pianoKeys.filter { !it.isBlack }.forEach { key ->
@@ -137,13 +203,14 @@ fun PianoKeyboardView(
             val isHighlighted = key.name == highlightedNote
             
             val offsetY by animateDpAsState(
-                targetValue = if (isPressed) 8.dp else 0.dp,
+                targetValue = if (isPressed) trackHeight + 8.dp else trackHeight,
                 animationSpec = spring(),
                 label = "press"
             )
             
             val color by animateColorAsState(
                 targetValue = when {
+                    key.name == wrongNote -> Color(0xFFFF5252)
                     isHighlighted -> BrightGreen
                     isPressed -> noteColors[key.whiteIndex % noteColors.size]
                     else -> SoftWhite
@@ -155,7 +222,7 @@ fun PianoKeyboardView(
                 modifier = Modifier
                     .offset(x = wWidth * key.whiteIndex, y = offsetY)
                     .width(wWidth)
-                    .fillMaxHeight()
+                    .height(wHeight)
                     .padding(end = 2.dp)
                     .shadow(if (isPressed) 0.dp else 4.dp, RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp))
                     .clip(RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp))
@@ -183,13 +250,14 @@ fun PianoKeyboardView(
             val isHighlighted = key.name == highlightedNote
 
             val offsetY by animateDpAsState(
-                targetValue = if (isPressed) 8.dp else 0.dp,
+                targetValue = if (isPressed) trackHeight + 8.dp else trackHeight,
                 animationSpec = spring(),
                 label = "press"
             )
 
             val color by animateColorAsState(
                 targetValue = when {
+                    key.name == wrongNote -> Color(0xFFFF5252)
                     isHighlighted -> BrightGreen
                     isPressed -> noteColors[(key.whiteIndex + 3) % noteColors.size]
                     else -> BlackKeys
@@ -210,6 +278,28 @@ fun PianoKeyboardView(
                         else Modifier
                     )
             )
+        }
+
+        // Draw jumping arrow over highlighted note
+        highlightedNote?.let { noteStr ->
+            val key = pianoKeys.find { it.name == noteStr }
+            if (key != null) {
+                val startX = if (key.isBlack) {
+                    wWidth * key.whiteIndex + wWidth * key.offsetRatio
+                } else {
+                    wWidth * key.whiteIndex
+                }
+                val keyWidth = if (key.isBlack) bWidth else wWidth
+                val arrowX = startX + keyWidth / 2f
+                
+                Text(
+                    text = "▼",
+                    color = Color.Yellow,
+                    fontSize = 32.sp,
+                    modifier = Modifier
+                        .offset(x = arrowX - 16.dp, y = trackHeight - 10.dp + arrowOffsetY.dp)
+                )
+            }
         }
     }
 }
