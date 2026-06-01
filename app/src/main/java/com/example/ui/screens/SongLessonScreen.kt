@@ -143,15 +143,20 @@ fun SongLessonScreen(
         val pixelsPerSecondDp = trackHeightDp / 4.0f 
         val msPerBeat = 60000f / song.bpm
         
+        val tileTargetY = trackHeightDp - 30.dp
+        
         val tiles = noteSchedules.mapNotNull { ns ->
             if (hitNoteIndices.containsKey(ns.index)) return@mapNotNull null
             
             val timeUntilHitMs = ns.scheduledTimeMs - currentElapsedTimeMs
             
-            val heightDp = (ns.durationBeats * (msPerBeat / 1000f)) * pixelsPerSecondDp.value
-            val yPosDp = trackHeightDp - heightDp.dp - ((timeUntilHitMs / 1000f) * pixelsPerSecondDp.value).dp
+            val rawHeight = (ns.durationBeats * (msPerBeat / 1000f)) * pixelsPerSecondDp.value
+            val heightDp = maxOf(rawHeight * 2.0f, 64f)
             
-            if (yPosDp > trackHeightDp) return@mapNotNull null
+            val bottomYDp = tileTargetY - ((timeUntilHitMs / 1000f) * pixelsPerSecondDp.value).dp
+            val yPosDp = bottomYDp - heightDp.dp
+            
+            if (yPosDp > maxHeightDp) return@mapNotNull null
             
             TileRenderData(
                 noteName = ns.note,

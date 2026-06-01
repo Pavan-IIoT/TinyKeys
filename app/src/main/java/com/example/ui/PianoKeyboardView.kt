@@ -99,7 +99,7 @@ fun PianoKeyboardView(
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Main)
                         val changes = event.changes
-                        
+
                         changes.forEach { change ->
                             if (change.pressed) {
                                 // Calculate which key is pressed
@@ -155,6 +155,17 @@ fun PianoKeyboardView(
         val bHeight = keysHeight * BLACK_KEY_HEIGHT_RATIO
 
         if (tiles.isNotEmpty()) {
+            val tileTargetY = trackHeight - 30.dp
+            
+            // Draw Target Line
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .offset(y = tileTargetY)
+                    .height(2.dp)
+                    .background(Color.White.copy(alpha = 0.4f))
+            )
+
             for (tile in tiles) {
                 val key = pianoKeys.find { it.name == tile.noteName } ?: continue
 
@@ -295,7 +306,7 @@ fun PianoKeyboardView(
                     color = Color.Yellow,
                     fontSize = 32.sp,
                     modifier = Modifier
-                        .offset(x = arrowX - 16.dp, y = trackHeight - 10.dp + arrowOffsetY.dp)
+                        .offset(x = arrowX - 16.dp, y = trackHeight - 40.dp + arrowOffsetY.dp)
                 )
             }
         }
