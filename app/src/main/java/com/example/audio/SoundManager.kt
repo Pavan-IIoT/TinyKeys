@@ -81,18 +81,21 @@ object SoundManager {
     }
 
     private fun generateTone(freq: Double, durationMs: Int): ShortArray {
-        val numSamples = (durationMs * SAMPLE_RATE) / 1000
+        val tailMs = 250
+        val totalMs = durationMs + tailMs
+        val numSamples = (totalMs * SAMPLE_RATE) / 1000
         val sample = ShortArray(numSamples)
         val envelopeAttack = (0.02 * SAMPLE_RATE).toInt() // 20ms attack
-        val envelopeRelease = (numSamples * 0.3).toInt() // 30% of note duration
+        val releaseStartIndex = (durationMs * SAMPLE_RATE) / 1000
+        val envelopeRelease = (tailMs * SAMPLE_RATE) / 1000
 
         for (i in 0 until numSamples) {
             val angle = 2.0 * Math.PI * i / (SAMPLE_RATE / freq)
             val envelope = when {
                 i < envelopeAttack -> i.toDouble() / envelopeAttack
-                i > numSamples - envelopeRelease -> (numSamples - i).toDouble() / envelopeRelease
+                i > releaseStartIndex -> 1.0 - (i - releaseStartIndex).toDouble() / envelopeRelease
                 else -> 1.0
-            }
+            }.coerceIn(0.0, 1.0)
             sample[i] = (sin(angle) * Short.MAX_VALUE * envelope * 0.7).toInt().toShort()
         }
         return sample
@@ -149,7 +152,8 @@ object SoundManager {
                 track.write(paddedBytes, 0, paddedBytes.size)
                 track.play()
                 
-                delay(durationMs.toLong())
+                val actualPlaybackMs = (bytes.size * 1000L) / SAMPLE_RATE
+                delay(actualPlaybackMs + 20)
                 try {
                     track.stop()
                 } catch (e: Exception) {}
