@@ -68,5 +68,10 @@ class MainActivity : ComponentActivity() {
       }
     }
   }
+
+  override fun onDestroy() {
+    super.onDestroy()
+    SoundManager.release()
+  }
 }
 

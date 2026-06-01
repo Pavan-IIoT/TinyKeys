@@ -7,7 +7,7 @@ import kotlinx.coroutines.*
 import kotlin.math.sin
 
 object SoundManager {
-    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private var scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private const val SAMPLE_RATE = 44100
     private const val DURATION_MS = 1500
 
@@ -25,6 +25,7 @@ object SoundManager {
     private lateinit var wrongFeedbackBytes: ShortArray
 
     fun init() {
+        if (!scope.isActive) scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
         scope.launch {
             frequencies.forEach { (note, freq) ->
                 noteBytes[note] = generateTone(freq, DURATION_MS)
@@ -32,6 +33,11 @@ object SoundManager {
             correctFeedbackBytes = generateTone(880.0, 150)
             wrongFeedbackBytes = generateTone(150.0, 300)
         }
+    }
+
+    fun release() {
+        scope.cancel()
+        noteBytes.clear()
     }
 
     private fun generateTone(freq: Double, durationMs: Int): ShortArray {
@@ -53,7 +59,7 @@ object SoundManager {
     }
 
     fun playNote(note: String) {
-        val bytes = noteBytes[note] ?: return
+        val bytes = noteBytes[note] ?: scope.launch { playBuffer(generateTone(frequencies[note]!!, DURATION_MS), DURATION_MS) }.let { return }
         playBuffer(bytes, DURATION_MS)
     }
 

@@ -26,10 +26,13 @@ import com.example.data.AppDatabase
 import com.example.data.SongRepository
 import com.example.data.SongScore
 import com.example.ui.PianoKeyboardView
+import com.example.ui.TileRenderData
 import com.example.ui.theme.DarkCharcoal
 import com.example.ui.theme.PastelBlue
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+data class NoteSchedule(val index: Int, val note: String, val durationBeats: Float, val scheduledTimeMs: Long)
 
 @Composable
 fun SongLessonScreen(
@@ -41,32 +44,90 @@ fun SongLessonScreen(
     val dao = remember { AppDatabase.getDatabase(context).songScoreDao() }
     val scope = rememberCoroutineScope()
     
-    val song = remember { SongRepository.getSong(songId)!! }
-    var currentNoteIndex by remember { mutableIntStateOf(0) }
+    val song = remember { SongRepository.getSong(songId) }
+    if (song == null) {
+        LaunchedEffect(Unit) { onBack() }
+        return
+    }
+
+    var currentElapsedTimeMs by remember { mutableLongStateOf(-2500L) }
     var mistakes by remember { mutableIntStateOf(0) }
     var isFinished by remember { mutableStateOf(false) }
     var lastWrongNote by remember { mutableStateOf<String?>(null) }
+    
+    val noteSchedules = remember(song) {
+        val schedules = mutableListOf<NoteSchedule>()
+        var currentBeat = 0f
+        val msPerBeat = 60000f / song.bpm
+        for (i in song.notes.indices) {
+            val n = song.notes[i]
+            val timeMs = (currentBeat * msPerBeat).toLong()
+            schedules.add(NoteSchedule(i, n.note, n.durationBeats, timeMs))
+            currentBeat += n.durationBeats
+        }
+        schedules
+    }
+    
+    val hitNoteIndices = remember { mutableStateMapOf<Int, Boolean>() }
+    val missedNoteIndices = remember { mutableStateMapOf<Int, Boolean>() }
 
-    val nextNote = if (currentNoteIndex < song.notes.size) song.notes[currentNoteIndex] else null
-    val progress = if (song.notes.isEmpty()) 0f else currentNoteIndex.toFloat() / song.notes.size
+    LaunchedEffect(isFinished) {
+        if (!isFinished) {
+            var lastFrameTime = withFrameMillis { it }
+            while (true) {
+                val currentFrameTime = withFrameMillis { it }
+                val delta = currentFrameTime - lastFrameTime
+                lastFrameTime = currentFrameTime
+                currentElapsedTimeMs += delta
+                
+                noteSchedules.forEach { ns ->
+                    if (!hitNoteIndices.containsKey(ns.index) && !missedNoteIndices.containsKey(ns.index)) {
+                        if (currentElapsedTimeMs > ns.scheduledTimeMs + 300) {
+                            missedNoteIndices[ns.index] = true
+                            mistakes++
+                        }
+                    }
+                }
+                
+                if (noteSchedules.all { hitNoteIndices.containsKey(it.index) || missedNoteIndices.containsKey(it.index) }) {
+                    if (!isFinished) {
+                        isFinished = true
+                    }
+                }
+            }
+        }
+    }
+
+    val starsEarned = remember(mistakes) {
+        when {
+            mistakes == 0 -> 3
+            mistakes <= 3 -> 2
+            else -> 1
+        }
+    }
+
+    LaunchedEffect(isFinished) {
+        if (isFinished) {
+            val existing = dao.getScore(songId)
+            val maxStars = maxOf(existing?.stars ?: 0, starsEarned)
+            dao.insertScore(SongScore(songId, maxStars))
+        }
+    }
+
+    val nextNote = noteSchedules.firstOrNull { 
+        !hitNoteIndices.containsKey(it.index) && !missedNoteIndices.containsKey(it.index)
+    }?.note
 
     val handleNotePlayed: (String) -> Unit = { note ->
         if (!isFinished) {
-            if (note == nextNote) {
-                currentNoteIndex++
-                if (currentNoteIndex >= song.notes.size) {
-                    isFinished = true
-                    val starsEarned = when {
-                        mistakes == 0 -> 3
-                        mistakes <= 3 -> 2
-                        else -> 1
-                    }
-                    scope.launch {
-                        val existing = dao.getScore(songId)
-                        val maxStars = maxOf(existing?.stars ?: 0, starsEarned)
-                        dao.insertScore(SongScore(songId, maxStars))
-                    }
-                }
+            val hitCandidate = noteSchedules.firstOrNull {
+                !hitNoteIndices.containsKey(it.index) && 
+                !missedNoteIndices.containsKey(it.index) && 
+                it.note == note && 
+                Math.abs(currentElapsedTimeMs - it.scheduledTimeMs) <= 300
+            }
+            if (hitCandidate != null) {
+                hitNoteIndices[hitCandidate.index] = true
             } else {
                 mistakes++
                 lastWrongNote = note
@@ -80,13 +141,35 @@ fun SongLessonScreen(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(PastelBlue)) {
+    BoxWithConstraints(modifier = Modifier.fillMaxSize().background(PastelBlue)) {
+        val maxHeightDp = maxHeight
+        val trackHeightDp = maxHeightDp * 0.45f
+        
+        val pixelsPerSecondDp = trackHeightDp / 2.5f 
+        val msPerBeat = 60000f / song.bpm
+        
+        val tiles = noteSchedules.mapNotNull { ns ->
+            if (hitNoteIndices.containsKey(ns.index) || missedNoteIndices.containsKey(ns.index)) return@mapNotNull null
+            
+            val timeUntilHitMs = ns.scheduledTimeMs - currentElapsedTimeMs
+            
+            val heightDp = (ns.durationBeats * (msPerBeat / 1000f)) * pixelsPerSecondDp.value
+            val yPosDp = trackHeightDp - heightDp.dp - ((timeUntilHitMs / 1000f) * pixelsPerSecondDp.value).dp
+            
+            if (yPosDp > trackHeightDp) return@mapNotNull null
+            
+            TileRenderData(
+                noteName = ns.note,
+                yPosDp = yPosDp,
+                heightDp = heightDp.dp
+            )
+        }
+
         PianoKeyboardView(
             modifier = Modifier.fillMaxSize(),
             highlightedNote = nextNote,
             wrongNote = lastWrongNote,
-            upcomingNotes = song.notes,
-            currentNoteIndex = currentNoteIndex,
+            tiles = tiles,
             onNotePlayed = handleNotePlayed
         )
 
@@ -116,18 +199,14 @@ fun SongLessonScreen(
                 ) {
                     Text("Well done! 🌟", fontSize = 48.sp, fontWeight = FontWeight.Bold)
                     
-                    val stars = when {
-                        mistakes == 0 -> 3
-                        mistakes <= 3 -> 2
-                        else -> 1
-                    }
-                    
-                    Text("You earned $stars stars!", fontSize = 32.sp, modifier = Modifier.padding(vertical = 16.dp))
+                    Text("You earned $starsEarned stars!", fontSize = 32.sp, modifier = Modifier.padding(vertical = 16.dp))
                     
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                         Button(onClick = {
-                            currentNoteIndex = 0
+                            currentElapsedTimeMs = -2500L
                             mistakes = 0
+                            hitNoteIndices.clear()
+                            missedNoteIndices.clear()
                             isFinished = false
                         }) {
                             Text("Play Again", fontSize = 20.sp)
