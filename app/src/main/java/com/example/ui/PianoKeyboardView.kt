@@ -71,11 +71,10 @@ val noteColors = listOf(
     Color(0xFF8AC926), Color(0xFF1982C4), Color(0xFF6A4C93)
 )
 
-data class TileRenderData(
+data class KeySliderInfo(
     val noteName: String,
-    val yPosDp: androidx.compose.ui.unit.Dp,
-    val heightDp: androidx.compose.ui.unit.Dp,
-    val isActive: Boolean = false
+    val progress: Float,
+    val colorIndex: Int
 )
 
 @Composable
@@ -83,13 +82,14 @@ fun PianoKeyboardView(
     modifier: Modifier = Modifier,
     highlightedNote: String? = null,
     wrongNote: String? = null,
-    tiles: List<TileRenderData> = emptyList(),
+    keySliders: List<KeySliderInfo> = emptyList(),
     onNotePlayed: (String) -> Unit = {},
     onNoteReleased: (String) -> Unit = {}
 ) {
     val pressedKeys = remember { mutableStateMapOf<Long, String>() }
     val currentOnNotePlayed by rememberUpdatedState(newValue = onNotePlayed)
     val currentOnNoteReleased by rememberUpdatedState(newValue = onNoteReleased)
+    val isLessonMode = highlightedNote != null || keySliders.isNotEmpty()
 
     BoxWithConstraints(
         modifier = modifier
@@ -97,7 +97,7 @@ fun PianoKeyboardView(
             .clipToBounds()
             .background(DarkCharcoal)
             .padding(top = 16.dp, bottom = 16.dp, start = 8.dp, end = 8.dp)
-            .pointerInput(Unit) {
+            .pointerInput(isLessonMode) {
                 awaitPointerEventScope {
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Main)
@@ -107,7 +107,7 @@ fun PianoKeyboardView(
                             if (change.pressed) {
                                 // Calculate which key is pressed
                                 val pt = change.position
-                                val trackHeight = size.height * (if (tiles.isNotEmpty()) 0.45f else 0f)
+                                val trackHeight = size.height * (if (isLessonMode) 0.3f else 0f)
                                 if (pt.y < trackHeight) return@forEach
                                 val keysHeight = size.height - trackHeight
 
@@ -152,7 +152,7 @@ fun PianoKeyboardView(
                 }
             }
     ) {
-        val trackHeight = maxHeight * (if (tiles.isNotEmpty()) 0.45f else 0f)
+        val trackHeight = if (isLessonMode) maxHeight * 0.3f else 0.dp
         val keysHeight = maxHeight - trackHeight
 
         val wWidth = maxWidth / WHITE_KEY_COUNT
@@ -160,53 +160,42 @@ fun PianoKeyboardView(
         val wHeight = keysHeight
         val bHeight = keysHeight * BLACK_KEY_HEIGHT_RATIO
 
-        if (tiles.isNotEmpty()) {
-            val tileTargetY = trackHeight - 30.dp
-            
-            // Draw Target Line
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .offset(y = tileTargetY)
-                    .height(2.dp)
-                    .background(Color.White.copy(alpha = 0.4f))
-            )
-
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(tileTargetY)
-                    .clipToBounds()
-            ) {
-                for (tile in tiles) {
-                    val key = pianoKeys.find { it.name == tile.noteName } ?: continue
-
+        // Vertical Timer / Sliders above specific keys
+        if (trackHeight > 0.dp) {
+            val groupedSliders = keySliders.groupBy { it.noteName }
+            groupedSliders.forEach { (noteName, slidersOnKey) ->
+                val key = pianoKeys.find { it.name == noteName }
+                if (key != null) {
                     val startX = if (key.isBlack) {
-                        wWidth * key.whiteIndex + wWidth * key.offsetRatio + wWidth * 0.05f
+                        wWidth * key.whiteIndex + wWidth * key.offsetRatio
                     } else {
-                        wWidth * key.whiteIndex + wWidth * 0.1f
+                        wWidth * key.whiteIndex
                     }
-                    val keyWidth = if (key.isBlack) bWidth * 0.9f else wWidth * 0.8f
-                    
-                    val blockColor = if (key.isBlack) {
-                        noteColors[(key.whiteIndex + 3) % noteColors.size]
-                    } else {
-                        noteColors[key.whiteIndex % noteColors.size]
-                    }
+                    val keyWidth = if (key.isBlack) bWidth else wWidth
 
-                    if (tile.yPosDp + tile.heightDp > 0.dp) {
-                        Box(
-                            modifier = Modifier
-                                .offset(x = startX, y = tile.yPosDp)
-                                .width(keyWidth)
-                                .height(tile.heightDp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (tile.isActive) blockColor else blockColor.copy(alpha = 0.8f))
-                                .then(
-                                    if (tile.isActive) androidx.compose.ui.Modifier.border(2.dp, androidx.compose.ui.graphics.Color.White.copy(alpha = 0.8f), androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
-                                    else androidx.compose.ui.Modifier
-                                )
-                        )
+                    Box(
+                        modifier = Modifier
+                            .offset(x = startX + keyWidth / 2f - 12.dp, y = 16.dp)
+                            .width(24.dp)
+                            .height(trackHeight - 32.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.White.copy(alpha = 0.2f))
+                            .border(1.dp, Color.White.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                    ) {
+                        // Drawing them in reverse order of size or just staggered
+                        slidersOnKey.reversed().forEachIndexed { index, slider ->
+                            val sliderColor = noteColors[slider.colorIndex % noteColors.size]
+                            val inset = (index * 4).dp // Make subsequent ones thinner so they show inside!
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(horizontal = inset)
+                                    .fillMaxWidth()
+                                    .fillMaxHeight(maxOf(0f, slider.progress))
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(sliderColor)
+                            )
+                        }
                     }
                 }
             }

@@ -26,7 +26,6 @@ import com.example.data.AppDatabase
 import com.example.data.SongRepository
 import com.example.data.SongScore
 import com.example.ui.PianoKeyboardView
-import com.example.ui.TileRenderData
 import com.example.ui.theme.DarkCharcoal
 import com.example.ui.theme.PastelBlue
 import kotlinx.coroutines.delay
@@ -164,59 +163,52 @@ fun SongLessonScreen(
     }
 
     BoxWithConstraints(modifier = Modifier.fillMaxSize().background(PastelBlue)) {
-        val maxHeightDp = maxHeight
-        val trackHeightDp = maxHeightDp * 0.45f
-        
-        val pixelsPerSecondDp = trackHeightDp / 4.0f 
         val msPerBeat = 60000f / song.bpm
-        
-        val tileTargetY = trackHeightDp - 30.dp
-        
-        val tiles = noteSchedules.mapNotNull { ns ->
-            val state = noteStates[ns.index] ?: NoteState.UPCOMING
-            if (state == NoteState.DONE) return@mapNotNull null
-            
-            val totalHoldMs = ns.durationBeats * msPerBeat
-            val rawHeight = (totalHoldMs / 1000f) * pixelsPerSecondDp.value
+        val maxDurationMs = msPerBeat * 4f // 4 beats = full height
 
-            if (state == NoteState.ACTIVE) {
-                val timeHeldMs = currentElapsedTimeMs - ns.scheduledTimeMs
-                val remainingHoldMs = (totalHoldMs - timeHeldMs).coerceAtLeast(0f)
-                val remainingHeightDp = (remainingHoldMs / 1000f) * pixelsPerSecondDp.value
-                val yPosDp = tileTargetY - remainingHeightDp.dp
-                val heightDp = remainingHeightDp.dp
-                
-                if (remainingHeightDp <= 0) return@mapNotNull null
-                
-                TileRenderData(
-                    noteName = ns.note,
-                    yPosDp = yPosDp,
-                    heightDp = heightDp,
-                    isActive = true
-                )
+        // Calculate hit count per note index
+        val hitIndices = remember(song) {
+            val counts = mutableMapOf<String, Int>()
+            song.notes.mapIndexed { index, schedule ->
+                val count = counts.getOrDefault(schedule.note, 0)
+                counts[schedule.note] = count + 1
+                index to count
+            }.toMap()
+        }
+
+        val keySliders = mutableListOf<com.example.ui.KeySliderInfo>()
+
+        // Get currently active notes
+        val activeSchedules = noteSchedules.filter { noteStates[it.index] == NoteState.ACTIVE }
+        // Get the next upcoming note(s) -- at most 2 to preview next in series
+        val upcomingSchedules = noteSchedules.filter { noteStates[it.index] == NoteState.UPCOMING }.take(2)
+
+        val notesToShow = activeSchedules + upcomingSchedules
+
+        // Sort by duration descending so larger sliders draw first (behind) in case of same note
+        val sortedNotesToShow = notesToShow.sortedByDescending { it.durationBeats }
+
+        sortedNotesToShow.forEach { schedule ->
+            val state = noteStates[schedule.index]
+            val totalHoldMs = schedule.durationBeats * msPerBeat
+            val baseProgress = (totalHoldMs / maxDurationMs).coerceIn(0.1f, 1f)
+
+            val progress = if (state == NoteState.ACTIVE) {
+                val timeHeldMs = currentElapsedTimeMs - schedule.scheduledTimeMs
+                val remainingRatio = 1f - (timeHeldMs.toFloat() / totalHoldMs.coerceAtLeast(1f))
+                baseProgress * remainingRatio.coerceAtLeast(0f)
             } else {
-                val timeUntilHitMs = ns.scheduledTimeMs - currentElapsedTimeMs
-                val heightDp = maxOf(rawHeight * 2.0f, 64f)
-                
-                val bottomYDp = tileTargetY - ((timeUntilHitMs / 1000f) * pixelsPerSecondDp.value).dp
-                val yPosDp = bottomYDp - heightDp.dp
-                
-                if (yPosDp > trackHeightDp) return@mapNotNull null
-                
-                TileRenderData(
-                    noteName = ns.note,
-                    yPosDp = yPosDp,
-                    heightDp = heightDp.dp,
-                    isActive = false
-                )
+                baseProgress
             }
+
+            keySliders.add(com.example.ui.KeySliderInfo(schedule.note, progress, hitIndices[schedule.index] ?: 0))
         }
 
         PianoKeyboardView(
             modifier = Modifier.fillMaxSize(),
             highlightedNote = nextNote,
             wrongNote = lastWrongNote,
-            tiles = tiles,
+            keySliders = keySliders,
             onNotePlayed = handleNotePlayed,
             onNoteReleased = handleNoteReleased
         )
