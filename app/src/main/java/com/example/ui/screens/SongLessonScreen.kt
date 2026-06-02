@@ -191,23 +191,33 @@ fun SongLessonScreen(
         sortedNotesToShow.forEach { schedule ->
             val state = noteStates[schedule.index]
             val totalHoldMs = schedule.durationBeats * msPerBeat
-            val baseProgress = (totalHoldMs / maxDurationMs).coerceIn(0.1f, 1f)
 
-            val progress = if (state == NoteState.ACTIVE) {
+            val yOffsetRatio: Float
+            val heightRatio: Float
+
+            if (state == NoteState.ACTIVE) {
+                // Bottom is at the key (0 offset). The total height shrinks as it is held.
                 val timeHeldMs = currentElapsedTimeMs - schedule.scheduledTimeMs
-                val remainingRatio = 1f - (timeHeldMs.toFloat() / totalHoldMs.coerceAtLeast(1f))
-                baseProgress * remainingRatio.coerceAtLeast(0f)
+                val remainingMs = totalHoldMs - timeHeldMs
+                yOffsetRatio = 0f
+                heightRatio = (remainingMs / maxDurationMs).coerceIn(0f, 1f)
             } else {
-                baseProgress
+                // Upcoming: it's above the key.
+                val timeUntilHit = schedule.scheduledTimeMs - currentElapsedTimeMs
+                yOffsetRatio = (timeUntilHit / maxDurationMs).coerceIn(0f, 1f)
+                heightRatio = (totalHoldMs / maxDurationMs).coerceIn(0f, 1f)
             }
 
-            keySliders.add(com.example.ui.KeySliderInfo(schedule.note, progress, hitIndices[schedule.index] ?: 0))
+            if (heightRatio > 0.01f) {
+                keySliders.add(com.example.ui.KeySliderInfo(schedule.note, heightRatio, yOffsetRatio, hitIndices[schedule.index] ?: 0))
+            }
         }
 
         PianoKeyboardView(
             modifier = Modifier.fillMaxSize(),
             highlightedNote = nextNote,
             wrongNote = lastWrongNote,
+            isLessonMode = true,
             keySliders = keySliders,
             onNotePlayed = handleNotePlayed,
             onNoteReleased = handleNoteReleased

@@ -73,7 +73,8 @@ val noteColors = listOf(
 
 data class KeySliderInfo(
     val noteName: String,
-    val progress: Float,
+    val heightRatio: Float,
+    val yOffsetRatio: Float,
     val colorIndex: Int
 )
 
@@ -82,6 +83,7 @@ fun PianoKeyboardView(
     modifier: Modifier = Modifier,
     highlightedNote: String? = null,
     wrongNote: String? = null,
+    isLessonMode: Boolean = false,
     keySliders: List<KeySliderInfo> = emptyList(),
     onNotePlayed: (String) -> Unit = {},
     onNoteReleased: (String) -> Unit = {}
@@ -89,7 +91,7 @@ fun PianoKeyboardView(
     val pressedKeys = remember { mutableStateMapOf<Long, String>() }
     val currentOnNotePlayed by rememberUpdatedState(newValue = onNotePlayed)
     val currentOnNoteReleased by rememberUpdatedState(newValue = onNoteReleased)
-    val isLessonMode = highlightedNote != null || keySliders.isNotEmpty()
+    val effectiveLessonMode = isLessonMode || highlightedNote != null || keySliders.isNotEmpty()
 
     BoxWithConstraints(
         modifier = modifier
@@ -97,7 +99,7 @@ fun PianoKeyboardView(
             .clipToBounds()
             .background(DarkCharcoal)
             .padding(top = 16.dp, bottom = 16.dp, start = 8.dp, end = 8.dp)
-            .pointerInput(isLessonMode) {
+            .pointerInput(effectiveLessonMode) {
                 awaitPointerEventScope {
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Main)
@@ -107,7 +109,7 @@ fun PianoKeyboardView(
                             if (change.pressed) {
                                 // Calculate which key is pressed
                                 val pt = change.position
-                                val trackHeight = size.height * (if (isLessonMode) 0.3f else 0f)
+                                val trackHeight = size.height * (if (effectiveLessonMode) 0.3f else 0f)
                                 if (pt.y < trackHeight) return@forEach
                                 val keysHeight = size.height - trackHeight
 
@@ -152,7 +154,7 @@ fun PianoKeyboardView(
                 }
             }
     ) {
-        val trackHeight = if (isLessonMode) maxHeight * 0.3f else 0.dp
+        val trackHeight = if (effectiveLessonMode) maxHeight * 0.3f else 0.dp
         val keysHeight = maxHeight - trackHeight
 
         val wWidth = maxWidth / WHITE_KEY_COUNT
@@ -177,7 +179,7 @@ fun PianoKeyboardView(
                         modifier = Modifier
                             .offset(x = startX + keyWidth / 2f - 12.dp, y = 16.dp)
                             .width(24.dp)
-                            .height(trackHeight - 32.dp)
+                            .height((trackHeight - 32.dp).coerceAtLeast(0.dp))
                             .clip(RoundedCornerShape(12.dp))
                             .background(Color.White.copy(alpha = 0.2f))
                             .border(1.dp, Color.White.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
@@ -186,12 +188,25 @@ fun PianoKeyboardView(
                         slidersOnKey.reversed().forEachIndexed { index, slider ->
                             val sliderColor = noteColors[slider.colorIndex % noteColors.size]
                             val inset = (index * 4).dp // Make subsequent ones thinner so they show inside!
+                            
+                            // To map yOffsetRatio (distance from bottom) to a graphic:
+                            // we can position a Box within the track using an offset from bottom.
+                            // But align(Alignment.BottomCenter) doesn't support percentage offset from bottom out of the box in Modifier natively,
+                            // except by doing fraction layout, or we can just use BoxWithConstraints or fillMaxHeight and spacer.
+                            // Simpler: use a Spacer to push it up inside a Column, or just use Modifier.align(BottomCenter) + Spacer.
+                            // Wait, BoxWithConstraints provides maxHeight. Since we know trackHeight value, we can use absolute offset in dp!
+                            
+                            // The track height is `(trackHeight - 32.dp).coerceAtLeast(0.dp)`
+                            val availableTrackHeight = (trackHeight - 32.dp).coerceAtLeast(0.dp)
+                            val yOffsetDp = availableTrackHeight * slider.yOffsetRatio
+                            
                             Box(
                                 modifier = Modifier
                                     .align(Alignment.BottomCenter)
+                                    .offset(y = -yOffsetDp)
                                     .padding(horizontal = inset)
                                     .fillMaxWidth()
-                                    .fillMaxHeight(maxOf(0f, slider.progress))
+                                    .height(availableTrackHeight * slider.heightRatio)
                                     .clip(RoundedCornerShape(12.dp))
                                     .background(sliderColor)
                             )
