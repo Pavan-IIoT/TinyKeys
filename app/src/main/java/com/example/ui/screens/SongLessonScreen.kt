@@ -178,10 +178,13 @@ fun SongLessonScreen(
 
         val keySliders = mutableListOf<com.example.ui.KeySliderInfo>()
 
-        // Get currently active notes
-        val activeSchedules = noteSchedules.filter { noteStates[it.index] == NoteState.ACTIVE }
-        // Get the next upcoming note(s) -- at most 2 to preview next in series
-        val upcomingSchedules = noteSchedules.filter { noteStates[it.index] == NoteState.UPCOMING }.take(2)
+       // Get currently active notes
+    val activeSchedules = noteSchedules.filter { noteStates[it.index] == NoteState.ACTIVE }
+
+// Get the next upcoming note(s) -- untouched notes are null, so treat null as UPCOMING
+    val upcomingSchedules = noteSchedules
+    .filter { noteStates[it.index] == null || noteStates[it.index] == NoteState.UPCOMING }
+    .take(2)
 
         val notesToShow = activeSchedules + upcomingSchedules
 

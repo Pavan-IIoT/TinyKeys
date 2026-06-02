@@ -81,22 +81,53 @@ object SoundManager {
     }
 
     private fun generateTone(freq: Double, durationMs: Int): ShortArray {
-        val tailMs = 250
+        val tailMs = 800
         val totalMs = durationMs + tailMs
         val numSamples = (totalMs * SAMPLE_RATE) / 1000
         val sample = ShortArray(numSamples)
-        val envelopeAttack = (0.02 * SAMPLE_RATE).toInt() // 20ms attack
-        val releaseStartIndex = (durationMs * SAMPLE_RATE) / 1000
-        val envelopeRelease = (tailMs * SAMPLE_RATE) / 1000
-
+        
+        val attackFrames = (0.005 * SAMPLE_RATE).toInt() // 5ms attack
+        
         for (i in 0 until numSamples) {
-            val angle = 2.0 * Math.PI * i / (SAMPLE_RATE / freq)
-            val envelope = when {
-                i < envelopeAttack -> i.toDouble() / envelopeAttack
-                i > releaseStartIndex -> 1.0 - (i - releaseStartIndex).toDouble() / envelopeRelease
-                else -> 1.0
-            }.coerceIn(0.0, 1.0)
-            sample[i] = (sin(angle) * Short.MAX_VALUE * envelope * 0.7).toInt().toShort()
+            val t = i.toDouble() / SAMPLE_RATE
+            val w = 2.0 * Math.PI * freq
+            
+            // Additive synthesis for a piano/Rhodes-like electric piano sound
+            var s = 0.0
+            
+            // Fundamental
+            s += 1.0 * kotlin.math.exp(-1.5 * t) * sin(1.0 * w * t)
+            // 2nd harmonic
+            s += 0.5 * kotlin.math.exp(-3.0 * t) * sin(2.0 * w * t)
+            // 3rd harmonic
+            s += 0.25 * kotlin.math.exp(-5.0 * t) * sin(3.0 * w * t)
+            // 4th harmonic
+            s += 0.125 * kotlin.math.exp(-8.0 * t) * sin(4.0 * w * t)
+            // 5th harmonic 
+            s += 0.0625 * kotlin.math.exp(-12.0 * t) * sin(5.0 * w * t)
+            
+            // Strike transient (percussive component)
+            if (t < 0.05) {
+                s += 0.1 * kotlin.math.exp(-50.0 * t) * (Math.random() * 2.0 - 1.0)
+            }
+            
+            // Overall envelope
+            val releaseStartSample = (durationMs * SAMPLE_RATE) / 1000
+            val env = if (i < attackFrames) {
+                i.toDouble() / attackFrames
+            } else if (i < releaseStartSample) {
+                // Sustain with natural decay
+                kotlin.math.exp(-0.2 * t)
+            } else {
+                // Key released: damper pedal off
+                val envAtRelease = kotlin.math.exp(-0.2 * (releaseStartSample.toDouble() / SAMPLE_RATE))
+                val dampDecay = kotlin.math.exp(-12.0 * ((i - releaseStartSample).toDouble() / SAMPLE_RATE))
+                envAtRelease * dampDecay
+            }
+            
+            s *= env * 0.4 // Overall volume scaling
+            
+            sample[i] = (s * Short.MAX_VALUE).toInt().coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
         }
         return sample
     }
